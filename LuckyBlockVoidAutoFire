@@ -1,0 +1,983 @@
+--[[
+	VOID MONITOR v2 — Matrix UI + Auto Fire
+	Expects: plr, targetPart (defined before this script)
+]]
+
+local targetPart = workspace:WaitForChild("CenterBlocks"):WaitForChild("Givers"):WaitForChild("VoidGiver"):WaitForChild("ColoredParts"):WaitForChild("TouchMe")
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Stats = game:GetService("Stats")
+
+local plr = plr or Players.LocalPlayer
+
+-- // Theme
+local THEME = {
+	bg         = Color3.fromRGB(6, 10, 7),
+	panel      = Color3.fromRGB(10, 16, 11),
+	panelAlt   = Color3.fromRGB(14, 22, 15),
+	accent     = Color3.fromRGB(0, 255, 120),
+	accentDim  = Color3.fromRGB(0, 180, 90),
+	accentGlow = Color3.fromRGB(0, 255, 160),
+	text       = Color3.fromRGB(210, 255, 220),
+	textDim    = Color3.fromRGB(100, 160, 110),
+	danger     = Color3.fromRGB(255, 70, 70),
+	warn       = Color3.fromRGB(255, 200, 60),
+	ok         = Color3.fromRGB(0, 255, 90),
+	stroke     = Color3.fromRGB(0, 255, 120),
+}
+
+local MATRIX_CHARS = { "0", "1", "X", "Y", "Z", "A", "7", "9", "Ξ", "Ω", "Ψ" }
+
+local function tween(inst, info, props)
+	local t = TweenService:Create(inst, info, props)
+	t:Play()
+	return t
+end
+
+local function corner(parent, radius)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, radius or 8)
+	c.Parent = parent
+	return c
+end
+
+local function stroke(parent, color, thickness, transparency)
+	local s = Instance.new("UIStroke")
+	s.Color = color or THEME.stroke
+	s.Thickness = thickness or 1
+	s.Transparency = transparency or 0.15
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	s.Parent = parent
+	return s
+end
+
+local function label(parent, props)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Font = Enum.Font.Code
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.TextYAlignment = Enum.TextYAlignment.Center
+	for k, v in pairs(props) do
+		l[k] = v
+	end
+	l.Parent = parent
+	return l
+end
+
+local function randomMatrixChar()
+	return MATRIX_CHARS[math.random(1, #MATRIX_CHARS)]
+end
+
+-- // Root GUI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "MatrixTestUI"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.IgnoreGuiInset = true
+
+local ok = pcall(function()
+	screenGui.Parent = game:GetService("CoreGui")
+end)
+if not ok then
+	screenGui.Parent = plr:WaitForChild("PlayerGui")
+end
+
+-- Shadow
+local shadow = Instance.new("Frame")
+shadow.Name = "Shadow"
+shadow.Size = UDim2.fromOffset(420, 340)
+shadow.Position = UDim2.new(0.5, -208, 0.58, 6)
+shadow.BackgroundColor3 = Color3.new(0, 0, 0)
+shadow.BackgroundTransparency = 0.72
+shadow.BorderSizePixel = 0
+shadow.ZIndex = 0
+shadow.Parent = screenGui
+corner(shadow, 12)
+
+-- Main shell
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.fromOffset(420, 340)
+main.Position = UDim2.new(0.5, -210, 0.58, 0)
+main.BackgroundColor3 = THEME.bg
+main.BorderSizePixel = 0
+main.ClipsDescendants = true
+main.Active = true
+main.Parent = screenGui
+corner(main, 12)
+
+local mainStroke = stroke(main, THEME.accent, 1.2, 0.35)
+
+local shellGradient = Instance.new("UIGradient")
+shellGradient.Rotation = 135
+shellGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(12, 20, 14)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(4, 8, 5)),
+})
+shellGradient.Parent = main
+
+-- Arm flash overlay
+local armFlash = Instance.new("Frame")
+armFlash.Size = UDim2.fromScale(1, 1)
+armFlash.BackgroundColor3 = THEME.accentGlow
+armFlash.BackgroundTransparency = 1
+armFlash.BorderSizePixel = 0
+armFlash.ZIndex = 20
+armFlash.Parent = main
+corner(armFlash, 12)
+
+-- Scan sweep for arm effect
+local armSweep = Instance.new("Frame")
+armSweep.Size = UDim2.new(1, 0, 0, 3)
+armSweep.Position = UDim2.new(0, 0, 0, -6)
+armSweep.BackgroundColor3 = THEME.accentGlow
+armSweep.BackgroundTransparency = 0.1
+armSweep.BorderSizePixel = 0
+armSweep.ZIndex = 21
+armSweep.Visible = false
+armSweep.Parent = main
+
+local sweepGradient = Instance.new("UIGradient")
+sweepGradient.Rotation = 90
+sweepGradient.Transparency = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 1),
+	NumberSequenceKeypoint.new(0.5, 0),
+	NumberSequenceKeypoint.new(1, 1),
+})
+sweepGradient.Parent = armSweep
+
+-- Matrix rain layer
+local rainLayer = Instance.new("Frame")
+rainLayer.Name = "RainLayer"
+rainLayer.Size = UDim2.fromScale(1, 1)
+rainLayer.BackgroundTransparency = 1
+rainLayer.ClipsDescendants = true
+rainLayer.ZIndex = 1
+rainLayer.Parent = main
+
+local rainColumns = {}
+local rainBoost = 0
+local COLUMN_COUNT = 18
+
+for i = 1, COLUMN_COUNT do
+	local col = label(rainLayer, {
+		Size = UDim2.new(0, 14, 1, 0),
+		Position = UDim2.new(0, (i - 1) * 24 + 4, 0, 0),
+		Text = "",
+		TextColor3 = THEME.accentDim,
+		TextSize = 13,
+		TextTransparency = 0.55,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		ZIndex = 1,
+	})
+	table.insert(rainColumns, {
+		label = col,
+		offset = math.random(-120, 0),
+		speed = math.random(8, 18),
+		charTimer = math.random() * 2,
+		charInterval = math.random(12, 22) / 10,
+		chars = {},
+	})
+end
+
+-- Scanlines
+local scanlines = Instance.new("Frame")
+scanlines.Size = UDim2.fromScale(1, 1)
+scanlines.BackgroundTransparency = 1
+scanlines.ZIndex = 2
+scanlines.Parent = main
+
+for i = 0, 8 do
+	local line = Instance.new("Frame")
+	line.Size = UDim2.new(1, 0, 0, 1)
+	line.Position = UDim2.new(0, 0, i / 8, 0)
+	line.BackgroundColor3 = Color3.new(0, 0, 0)
+	line.BackgroundTransparency = 0.92
+	line.BorderSizePixel = 0
+	line.ZIndex = 2
+	line.Parent = scanlines
+end
+
+-- Content layer
+local content = Instance.new("Frame")
+content.Name = "Content"
+content.Size = UDim2.fromScale(1, 1)
+content.BackgroundTransparency = 1
+content.ZIndex = 5
+content.Parent = main
+
+-- Title bar
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 36)
+titleBar.BackgroundColor3 = THEME.panelAlt
+titleBar.BackgroundTransparency = 0.15
+titleBar.BorderSizePixel = 0
+titleBar.ZIndex = 6
+titleBar.Parent = content
+stroke(titleBar, THEME.accent, 1, 0.7)
+
+local titleText = label(titleBar, {
+	Size = UDim2.new(1, -120, 1, 0),
+	Position = UDim2.new(0, 12, 0, 0),
+	Text = "VOID MONITOR // v2.0",
+	TextColor3 = THEME.accent,
+	TextSize = 15,
+})
+
+local pulseDot = Instance.new("Frame")
+pulseDot.Size = UDim2.fromOffset(8, 8)
+pulseDot.Position = UDim2.new(0, 248, 0.5, -4)
+pulseDot.BackgroundColor3 = THEME.ok
+pulseDot.BorderSizePixel = 0
+pulseDot.ZIndex = 7
+pulseDot.Parent = titleBar
+corner(pulseDot, 4)
+
+tween(pulseDot, TweenInfo.new(0.9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
+	BackgroundTransparency = 0.55,
+})
+
+local function makeTitleButton(text, x)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.fromOffset(28, 24)
+	btn.Position = UDim2.new(1, x, 0.5, -12)
+	btn.BackgroundColor3 = THEME.panel
+	btn.BackgroundTransparency = 0.2
+	btn.BorderSizePixel = 0
+	btn.Text = text
+	btn.TextColor3 = THEME.textDim
+	btn.TextSize = 14
+	btn.Font = Enum.Font.Code
+	btn.AutoButtonColor = false
+	btn.ZIndex = 7
+	btn.Parent = titleBar
+	corner(btn, 5)
+	stroke(btn, THEME.accentDim, 1, 0.65)
+	return btn
+end
+
+local minimizeBtn = makeTitleButton("_", -68)
+local closeBtn = makeTitleButton("x", -34)
+
+-- Tab bar
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1, -20, 0, 28)
+tabBar.Position = UDim2.new(0, 10, 0, 42)
+tabBar.BackgroundTransparency = 1
+tabBar.ZIndex = 6
+tabBar.Parent = content
+
+local tabLayout = Instance.new("UIListLayout")
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.Padding = UDim.new(0, 6)
+tabLayout.Parent = tabBar
+
+local pages = {}
+local activePage = "Monitor"
+
+local function makeTab(name)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.fromOffset(96, 26)
+	btn.BackgroundColor3 = THEME.panel
+	btn.BackgroundTransparency = 0.35
+	btn.BorderSizePixel = 0
+	btn.Text = string.upper(name)
+	btn.TextColor3 = THEME.textDim
+	btn.TextSize = 12
+	btn.Font = Enum.Font.Code
+	btn.AutoButtonColor = false
+	btn.ZIndex = 6
+	btn.Parent = tabBar
+	corner(btn, 6)
+
+	local page = Instance.new("Frame")
+	page.Name = name
+	page.Size = UDim2.new(1, -20, 1, -118)
+	page.Position = UDim2.new(0, 10, 0, 78)
+	page.BackgroundTransparency = 1
+	page.Visible = false
+	page.ZIndex = 6
+	page.Parent = content
+	pages[name] = { button = btn, frame = page }
+
+	local function refreshTabs()
+		for n, data in pairs(pages) do
+			local active = n == activePage
+			data.frame.Visible = active
+			data.button.TextColor3 = active and THEME.accent or THEME.textDim
+			data.button.BackgroundTransparency = active and 0.1 or 0.45
+		end
+	end
+
+	btn.MouseButton1Click:Connect(function()
+		activePage = name
+		refreshTabs()
+	end)
+
+	refreshTabs()
+	return page
+end
+
+local monitorPage = makeTab("Monitor")
+local controlsPage = makeTab("Controls")
+local logPage = makeTab("Log")
+pages.Monitor.frame.Visible = true
+pages.Monitor.button.TextColor3 = THEME.accent
+
+-- // MONITOR PAGE
+local statusLabel = label(monitorPage, {
+	Size = UDim2.new(1, 0, 0, 28),
+	Position = UDim2.new(0, 0, 0, 0),
+	Text = "[ SYSTEM: IDLE ]",
+	TextColor3 = THEME.ok,
+	TextSize = 16,
+})
+
+local subStatus = label(monitorPage, {
+	Size = UDim2.new(1, 0, 0, 18),
+	Position = UDim2.new(0, 0, 0, 30),
+	Text = "Awaiting input...",
+	TextColor3 = THEME.textDim,
+	TextSize = 12,
+})
+
+local statsRow = Instance.new("Frame")
+statsRow.Size = UDim2.new(1, 0, 0, 22)
+statsRow.Position = UDim2.new(0, 0, 0, 56)
+statsRow.BackgroundTransparency = 1
+statsRow.Parent = monitorPage
+
+local statLayout = Instance.new("UIListLayout")
+statLayout.FillDirection = Enum.FillDirection.Horizontal
+statLayout.Padding = UDim.new(0, 8)
+statLayout.Parent = statsRow
+
+local function statChip(title, value)
+	local chip = Instance.new("Frame")
+	chip.Size = UDim2.fromOffset(122, 22)
+	chip.BackgroundColor3 = THEME.panel
+	chip.BackgroundTransparency = 0.25
+	chip.BorderSizePixel = 0
+	chip.Parent = statsRow
+	corner(chip, 5)
+
+	label(chip, {
+		Size = UDim2.new(0.45, 0, 1, 0),
+		Position = UDim2.new(0, 6, 0, 0),
+		Text = title,
+		TextColor3 = THEME.textDim,
+		TextSize = 11,
+	})
+
+	local v = label(chip, {
+		Size = UDim2.new(0.55, -6, 1, 0),
+		Position = UDim2.new(0.45, 0, 0, 0),
+		Text = value,
+		TextColor3 = THEME.accent,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Right,
+	})
+	return v
+end
+
+local fpsLabel = statChip("FPS", "--")
+local pingLabel = statChip("PING", "--")
+local uptimeLabel = statChip("UPTIME", "00:00")
+
+local barBg = Instance.new("Frame")
+barBg.Size = UDim2.new(1, 0, 0, 12)
+barBg.Position = UDim2.new(0, 0, 0, 88)
+barBg.BackgroundColor3 = THEME.panelAlt
+barBg.BorderSizePixel = 0
+barBg.Parent = monitorPage
+corner(barBg, 6)
+
+local barFill = Instance.new("Frame")
+barFill.Size = UDim2.new(0, 0, 1, 0)
+barFill.BackgroundColor3 = THEME.accent
+barFill.BorderSizePixel = 0
+barFill.Parent = barBg
+corner(barFill, 6)
+
+local barGlow = Instance.new("UIGradient")
+barGlow.Rotation = 0
+barGlow.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, THEME.accentDim),
+	ColorSequenceKeypoint.new(1, THEME.accentGlow),
+})
+barGlow.Parent = barFill
+
+local progressText = label(monitorPage, {
+	Size = UDim2.new(1, 0, 0, 16),
+	Position = UDim2.new(0, 0, 0, 104),
+	Text = "PROGRESS: 0%",
+	TextColor3 = THEME.textDim,
+	TextSize = 11,
+})
+
+-- Main AUTO_FIRE button
+local toggleButton = Instance.new("TextButton")
+toggleButton.Size = UDim2.new(1, 0, 0, 42)
+toggleButton.Position = UDim2.new(0, 0, 1, -82)
+toggleButton.BackgroundColor3 = THEME.panel
+toggleButton.BackgroundTransparency = 0.2
+toggleButton.BorderSizePixel = 0
+toggleButton.Text = "AUTO_FIRE: DISABLED"
+toggleButton.TextColor3 = THEME.danger
+toggleButton.TextSize = 14
+toggleButton.Font = Enum.Font.Code
+toggleButton.AutoButtonColor = false
+toggleButton.Parent = monitorPage
+corner(toggleButton, 6)
+
+local toggleStroke = stroke(toggleButton, THEME.danger, 1, 0.35)
+
+local quickActions = Instance.new("Frame")
+quickActions.Size = UDim2.new(1, 0, 0, 34)
+quickActions.Position = UDim2.new(0, 0, 1, -34)
+quickActions.BackgroundTransparency = 1
+quickActions.Parent = monitorPage
+
+local actionLayout = Instance.new("UIListLayout")
+actionLayout.FillDirection = Enum.FillDirection.Horizontal
+actionLayout.Padding = UDim.new(0, 8)
+actionLayout.Parent = quickActions
+
+local function actionButton(text)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.fromOffset(195, 32)
+	btn.BackgroundColor3 = THEME.panel
+	btn.BackgroundTransparency = 0.2
+	btn.BorderSizePixel = 0
+	btn.Text = text
+	btn.TextColor3 = THEME.text
+	btn.TextSize = 12
+	btn.Font = Enum.Font.Code
+	btn.AutoButtonColor = false
+	btn.Parent = quickActions
+	corner(btn, 6)
+	stroke(btn, THEME.accentDim, 1, 0.55)
+
+	btn.MouseEnter:Connect(function()
+		tween(btn, TweenInfo.new(0.15), { BackgroundTransparency = 0.05, TextColor3 = THEME.accentGlow })
+	end)
+	btn.MouseLeave:Connect(function()
+		tween(btn, TweenInfo.new(0.15), { BackgroundTransparency = 0.2, TextColor3 = THEME.text })
+	end)
+	return btn
+end
+
+local resetBtn = actionButton("RESET")
+local hideBtn = actionButton("HIDE UI")
+
+-- // CONTROLS PAGE
+local toggleCallbacks = {}
+local toggleStates = {}
+local toggleButtons = {}
+
+local function makeToggle(name, defaultEnabled)
+	toggleStates[name] = defaultEnabled or false
+	toggleCallbacks[name] = {}
+
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 38)
+	row.BackgroundColor3 = THEME.panel
+	row.BackgroundTransparency = 0.25
+	row.BorderSizePixel = 0
+	row.Parent = controlsPage
+	corner(row, 7)
+	stroke(row, THEME.accentDim, 1, 0.75)
+
+	label(row, {
+		Size = UDim2.new(1, -110, 1, 0),
+		Position = UDim2.new(0, 10, 0, 0),
+		Text = string.upper(name),
+		TextColor3 = THEME.text,
+		TextSize = 13,
+	})
+
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.fromOffset(88, 26)
+	btn.Position = UDim2.new(1, -98, 0.5, -13)
+	btn.BackgroundColor3 = THEME.panelAlt
+	btn.BorderSizePixel = 0
+	btn.Font = Enum.Font.Code
+	btn.TextSize = 11
+	btn.AutoButtonColor = false
+	btn.Parent = row
+	corner(btn, 5)
+	toggleButtons[name] = btn
+
+	local function refresh()
+		local on = toggleStates[name]
+		btn.Text = on and "ENABLED" or "DISABLED"
+		btn.TextColor3 = on and THEME.ok or THEME.danger
+		stroke(btn, on and THEME.ok or THEME.danger, 1, 0.35)
+	end
+
+	btn.MouseButton1Click:Connect(function()
+		setAutoFire(not toggleStates[name])
+	end)
+
+	refresh()
+end
+
+makeToggle("Auto Fire", false)
+makeToggle("Silent Mode", false)
+makeToggle("Matrix FX", true)
+
+local controlsLayout = Instance.new("UIListLayout")
+controlsLayout.Padding = UDim.new(0, 8)
+controlsLayout.Parent = controlsPage
+
+-- // LOG PAGE
+local logScroll = Instance.new("ScrollingFrame")
+logScroll.Size = UDim2.fromScale(1, 1)
+logScroll.BackgroundColor3 = THEME.panel
+logScroll.BackgroundTransparency = 0.35
+logScroll.BorderSizePixel = 0
+logScroll.ScrollBarThickness = 4
+logScroll.ScrollBarImageColor3 = THEME.accentDim
+logScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+logScroll.Parent = logPage
+corner(logScroll, 7)
+stroke(logScroll, THEME.accentDim, 1, 0.75)
+
+local logLayout = Instance.new("UIListLayout")
+logLayout.Padding = UDim.new(0, 2)
+logLayout.SortOrder = Enum.SortOrder.LayoutOrder
+logLayout.Parent = logScroll
+
+local logPadding = Instance.new("UIPadding")
+logPadding.PaddingTop = UDim.new(0, 6)
+logPadding.PaddingBottom = UDim.new(0, 6)
+logPadding.PaddingLeft = UDim.new(0, 8)
+logPadding.PaddingRight = UDim.new(0, 8)
+logPadding.Parent = logScroll
+
+local logLines = {}
+local MAX_LOG = 80
+
+local LOG_COLORS = {
+	info = THEME.textDim,
+	warn = THEME.warn,
+	error = THEME.danger,
+	ok = THEME.ok,
+}
+
+-- // State
+local isToggled = false
+local isOnCooldown = false
+local cooldownDuration = 1200
+local arming = false
+
+-- // API
+local Monitor = {}
+Monitor._gui = screenGui
+Monitor._main = main
+Monitor._shadow = shadow
+Monitor._rainLayer = rainLayer
+Monitor._barFill = barFill
+
+function Monitor.SetStatus(text, subtext)
+	statusLabel.Text = string.format("[ %s ]", string.upper(text or "IDLE"))
+	if subtext then
+		subStatus.Text = subtext
+	end
+end
+
+function Monitor.SetProgress(ratio)
+	ratio = math.clamp(ratio or 0, 0, 1)
+	tween(barFill, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Size = UDim2.new(ratio, 0, 1, 0),
+	})
+	progressText.Text = string.format("PROGRESS: %d%%", math.floor(ratio * 100))
+end
+
+function Monitor.Log(message, level)
+	level = level or "info"
+	local stamp = os.date("%H:%M:%S")
+	local line = label(logScroll, {
+		Size = UDim2.new(1, -8, 0, 16),
+		Text = string.format("[%s] %s", stamp, tostring(message)),
+		TextColor3 = LOG_COLORS[level] or LOG_COLORS.info,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		LayoutOrder = #logLines + 1,
+	})
+	table.insert(logLines, line)
+	if #logLines > MAX_LOG then
+		logLines[1]:Destroy()
+		table.remove(logLines, 1)
+	end
+	logScroll.CanvasSize = UDim2.new(0, 0, 0, logLayout.AbsoluteContentSize.Y + 12)
+	logScroll.CanvasPosition = Vector2.new(0, math.max(0, logScroll.CanvasSize.Y.Offset))
+end
+
+function Monitor.SetToggle(name, enabled)
+	if toggleStates[name] == nil then return end
+	toggleStates[name] = not not enabled
+	local btn = toggleButtons[name]
+	if btn then
+		local on = toggleStates[name]
+		btn.Text = on and "ENABLED" or "DISABLED"
+		btn.TextColor3 = on and THEME.ok or THEME.danger
+		stroke(btn, on and THEME.ok or THEME.danger, 1, 0.35)
+	end
+end
+
+function Monitor.OnToggle(name, callback)
+	if not toggleCallbacks[name] then
+		toggleCallbacks[name] = {}
+	end
+	table.insert(toggleCallbacks[name], callback)
+end
+
+function Monitor.SetVisible(state)
+	main.Visible = state
+	shadow.Visible = state
+end
+
+function Monitor.SetMatrixEnabled(state)
+	rainLayer.Visible = state
+end
+
+-- // Arm effect
+local function playArmEffect()
+	if arming then return end
+	arming = true
+
+	Monitor.Log("Systems arming...", "ok")
+	rainBoost = 1
+
+	-- Green flash
+	armFlash.BackgroundTransparency = 0.55
+	tween(armFlash, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		BackgroundTransparency = 1,
+	})
+
+	-- Border pulse
+	mainStroke.Thickness = 1.2
+	mainStroke.Color = THEME.accentGlow
+	tween(mainStroke, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Thickness = 3.5,
+		Transparency = 0,
+	})
+	task.delay(0.35, function()
+		tween(mainStroke, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Thickness = 1.2,
+			Transparency = 0.35,
+			Color = THEME.accent,
+		})
+	end)
+
+	-- Scan sweep
+	armSweep.Visible = true
+	armSweep.Position = UDim2.new(0, 0, 0, -6)
+	tween(armSweep, TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Position = UDim2.new(0, 0, 1, 6),
+	})
+	task.delay(0.5, function()
+		armSweep.Visible = false
+	end)
+
+	-- Button pulse
+	toggleButton.Text = ">> ARMING <<"
+	toggleButton.TextColor3 = THEME.accentGlow
+	tween(toggleButton, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 3, true), {
+		BackgroundTransparency = 0,
+	})
+
+	-- Status flicker
+	task.spawn(function()
+		local messages = { "INITIALIZING...", "SYNCING TARGETS...", "WEAPONS HOT..." }
+		for _, msg in ipairs(messages) do
+			Monitor.SetStatus("ARMING", msg)
+			statusLabel.TextColor3 = THEME.accentGlow
+			task.wait(0.18)
+		end
+	end)
+
+	-- Title glitch
+	task.spawn(function()
+		local original = titleText.Text
+		for _ = 1, 8 do
+			titleText.Text = "VOID MONITOR // " .. randomMatrixChar() .. randomMatrixChar() .. randomMatrixChar()
+			titleText.TextColor3 = THEME.accentGlow
+			task.wait(0.05)
+		end
+		titleText.Text = original
+		titleText.TextColor3 = THEME.accent
+	end)
+
+	task.delay(0.65, function()
+		rainBoost = 0
+		refreshAutoFireButton(true)
+		Monitor.SetStatus("ARMED", "Auto fire enabled — watching target")
+		statusLabel.TextColor3 = THEME.ok
+		Monitor.Log("Systems armed", "ok")
+		arming = false
+	end)
+end
+
+local function playDisarmEffect()
+	rainBoost = 0
+	mainStroke.Color = THEME.accent
+	mainStroke.Thickness = 1.2
+
+	tween(toggleButton, TweenInfo.new(0.2), {
+		BackgroundTransparency = 0.2,
+	})
+
+	refreshAutoFireButton(false)
+	Monitor.SetStatus("IDLE", "Auto fire disabled")
+	statusLabel.TextColor3 = THEME.ok
+	Monitor.Log("Systems disarmed", "warn")
+end
+
+function refreshAutoFireButton(enabled)
+	toggleButton.Text = enabled and "AUTO_FIRE: ENABLED" or "AUTO_FIRE: DISABLED"
+	toggleButton.TextColor3 = enabled and THEME.ok or THEME.danger
+	toggleStroke.Color = enabled and THEME.ok or THEME.danger
+end
+
+function setAutoFire(enabled)
+	if arming then return end
+	if enabled == isToggled then return end
+
+	isToggled = enabled
+	Monitor.SetToggle("Auto Fire", enabled)
+
+	if enabled then
+		playArmEffect()
+	else
+		playDisarmEffect()
+	end
+
+	for _, cb in ipairs(toggleCallbacks["Auto Fire"] or {}) do
+		task.spawn(cb, enabled)
+	end
+end
+
+toggleButton.MouseButton1Click:Connect(function()
+	setAutoFire(not isToggled)
+end)
+
+-- // Dragging
+local dragging, dragStart, startPos, startShadow
+
+local function syncShadow()
+	shadow.Position = UDim2.new(
+		main.Position.X.Scale,
+		main.Position.X.Offset + 6,
+		main.Position.Y.Scale,
+		main.Position.Y.Offset + 6
+	)
+end
+
+titleBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = true
+		dragStart = input.Position
+		startPos = main.Position
+		startShadow = shadow.Position
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - dragStart
+		main.Position = UDim2.new(
+			startPos.X.Scale, startPos.X.Offset + delta.X,
+			startPos.Y.Scale, startPos.Y.Offset + delta.Y
+		)
+		shadow.Position = UDim2.new(
+			startShadow.X.Scale, startShadow.X.Offset + delta.X,
+			startShadow.Y.Scale, startShadow.Y.Offset + delta.Y
+		)
+	end
+end)
+
+-- // Window controls
+local collapsed = false
+local expandedSize = main.Size
+
+minimizeBtn.MouseButton1Click:Connect(function()
+	collapsed = not collapsed
+	if collapsed then
+		tween(main, TweenInfo.new(0.2), { Size = UDim2.fromOffset(420, 36) })
+		content.Visible = false
+		shadow.Visible = false
+	else
+		content.Visible = true
+		shadow.Visible = true
+		tween(main, TweenInfo.new(0.2), { Size = expandedSize })
+		syncShadow()
+	end
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	Monitor.SetVisible(false)
+	Monitor.Log("UI hidden — press RightShift to reopen", "warn")
+end)
+
+hideBtn.MouseButton1Click:Connect(function()
+	Monitor.SetVisible(false)
+end)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed then return end
+	if input.KeyCode == Enum.KeyCode.RightShift then
+		Monitor.SetVisible(not main.Visible)
+	end
+end)
+
+-- // Matrix rain loop
+for _, col in ipairs(rainColumns) do
+	col.chars = {}
+	for _ = 1, math.random(8, 14) do
+		table.insert(col.chars, randomMatrixChar())
+	end
+	col.label.Text = table.concat(col.chars, "\n")
+end
+
+RunService.RenderStepped:Connect(function(dt)
+	if not rainLayer.Visible then return end
+
+	for _, col in ipairs(rainColumns) do
+		local speedMul = 1 + (rainBoost * 1.8)
+		col.offset += col.speed * speedMul * dt
+
+		if col.offset > 260 then
+			col.offset = math.random(-80, -20)
+		end
+
+		col.charTimer += dt
+		local interval = col.charInterval / (1 + rainBoost * 0.8)
+		if col.charTimer >= interval then
+			col.charTimer = 0
+			local index = math.random(1, #col.chars)
+			col.chars[index] = randomMatrixChar()
+			col.label.Text = table.concat(col.chars, "\n")
+		end
+
+		col.label.Position = UDim2.new(col.label.Position.X.Scale, col.label.Position.X.Offset, 0, col.offset)
+		col.label.TextTransparency = (0.35 + (math.sin(os.clock() * 0.8 + col.speed) * 0.12)) - (rainBoost * 0.15)
+	end
+end)
+
+-- // Live stats
+local startClock = os.clock()
+
+task.spawn(function()
+	while screenGui.Parent do
+		local fps = math.floor(1 / RunService.RenderStepped:Wait())
+		fpsLabel.Text = tostring(fps)
+
+		local ping = "--"
+		pcall(function()
+			ping = tostring(math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue()))
+		end)
+		pingLabel.Text = ping .. "ms"
+
+		local elapsed = math.floor(os.clock() - startClock)
+		local m = math.floor(elapsed / 60)
+		local s = elapsed % 60
+		uptimeLabel.Text = string.format("%02d:%02d", m, s)
+
+		task.wait(0.5)
+	end
+end)
+
+Monitor.OnToggle("Matrix FX", function(enabled)
+	Monitor.SetMatrixEnabled(enabled)
+end)
+
+Monitor.OnToggle("Auto Fire", function(enabled)
+	isToggled = enabled
+	if not arming then
+		refreshAutoFireButton(enabled)
+	end
+end)
+
+resetBtn.MouseButton1Click:Connect(function()
+	if isToggled then
+		setAutoFire(false)
+	end
+	isOnCooldown = false
+	Monitor.SetProgress(0)
+	barFill.BackgroundColor3 = THEME.accent
+	Monitor.SetStatus("IDLE", "Awaiting input...")
+	Monitor.Log("System reset", "warn")
+end)
+
+Monitor.Log("Void Monitor initialized", "ok")
+Monitor.SetStatus("IDLE", "Press AUTO_FIRE to arm")
+
+-- // AUTO FIRE LOGIC
+local function checkAndFire()
+	if targetPart.BrickColor == BrickColor.new("Cyan") then
+		if not isOnCooldown then
+			Monitor.SetStatus("TARGET: CYAN DETECTED", "Cyan target locked")
+		end
+
+		if isToggled and not isOnCooldown then
+			local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+			if hrp then
+				isOnCooldown = true
+				Monitor.SetStatus("EXECUTING", "Touch interest firing...")
+				barFill.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+
+				if type(firetouchinterest) == "function" then
+					firetouchinterest(hrp, targetPart, 0)
+					task.wait(0.05)
+					firetouchinterest(hrp, targetPart, 1)
+					Monitor.Log("Touch interest executed", "ok")
+				else
+					warn("firetouchinterest function not found in this environment context.")
+					Monitor.Log("firetouchinterest not found", "error")
+				end
+
+				task.spawn(function()
+					local startTime = os.time()
+					while os.time() - startTime < cooldownDuration do
+						local elapsed = os.time() - startTime
+						local remaining = cooldownDuration - elapsed
+
+						Monitor.SetStatus(
+							string.format("COOLDOWN %02d:%02d", math.floor(remaining / 60), remaining % 60),
+							"Waiting before next fire"
+						)
+						Monitor.SetProgress(1 - (elapsed / cooldownDuration))
+						task.wait(1)
+					end
+
+					isOnCooldown = false
+					Monitor.SetProgress(0)
+					barFill.BackgroundColor3 = Color3.fromRGB(0, 255, 70)
+					Monitor.SetStatus("READY", "System ready")
+					Monitor.Log("Cooldown complete", "ok")
+					checkAndFire()
+				end)
+			end
+		end
+	else
+		if not isOnCooldown then
+			Monitor.SetStatus("SEARCHING", "Scanning for cyan target...")
+		end
+	end
+end
+
+targetPart:GetPropertyChangedSignal("BrickColor"):Connect(checkAndFire)
+checkAndFire()
+
+return Monitor
